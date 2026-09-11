@@ -19,7 +19,7 @@ Este backend provee la API REST que impulsa el producto:
 
 El backend fue diseñado bajo una **arquitectura en capas desacopladas (Clean Architecture simplificada)**, asegurando escalabilidad, mantenibilidad y facilidad de prueba:
 
-`	ext
+```text
 backend/
 ├── app/
 │   ├── api/
@@ -36,7 +36,7 @@ backend/
 ├── .gitignore                    # Reglas de exclusión de seguridad y entorno
 ├── requirements.txt              # Dependencias fijadas del proyecto
 └── README.md                     # Documentación general de arquitectura y ejecución
-`
+```
 
 ### 💡 Justificación de Decisiones Técnicas:
 
