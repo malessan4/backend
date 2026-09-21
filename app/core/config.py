@@ -25,12 +25,25 @@ class Settings(BaseSettings):
     PORT: int = Field(default=8000, ge=1, le=65535)
 
     # --- Credenciales y Secretos ---
-    # Sin default: si falta en .env, la app NO arranca (Fail-Fast).
-    # SecretStr: previene que la clave se exponga en logs, tracebacks o repr().
-    GEMINI_API_KEY: SecretStr
+    # Opcional: ahora las API keys de Gemini se gestionan desde /admin (persistidas
+    # en SQLite). Si está presente en el primer arranque y la DB está vacía, se usa
+    # una única vez como semilla de la "Key #1".
+    GEMINI_API_KEY: SecretStr | None = None
 
     # Modelo de Gemini a utilizar (configurable sin redeployar)
     GEMINI_MODEL: str = "gemini-2.5-flash"
+
+    # --- Panel de Administración (/admin, protegido con HTTP Basic Auth) ---
+    ADMIN_USERNAME: str = "admin"
+    # Sin default: si falta en .env, la app NO arranca (Fail-Fast).
+    ADMIN_PASSWORD: SecretStr
+
+    # --- Persistencia local (SQLite) de API Keys de Gemini y contadores de uso ---
+    DATABASE_PATH: str = "app_data.db"
+
+    # Clave simétrica (Fernet) para cifrar las API keys guardadas en la DB.
+    # Generarla con: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    DB_ENCRYPTION_KEY: SecretStr
 
     # --- Seguridad / CORS ---
     # Acepta tanto lista Python como string separado por comas desde el .env

@@ -1,6 +1,7 @@
 ﻿from google import genai
 
 from app.core.config import settings
+from app.services import key_rotation_service
 
 
 class GeminiService:
@@ -13,24 +14,17 @@ class GeminiService:
     """
 
     def __init__(self):
-        self._client: genai.Client | None = None
+        self._clients: dict[int, genai.Client] = {}
 
-    @property
-    def client(self) -> genai.Client:
+    def _get_client(self) -> tuple[int, genai.Client]:
         """
-        Inicializa el cliente de Gemini de forma lazy (solo cuando se necesita).
-        Usa get_secret_value() para extraer el string real desde SecretStr de forma segura.
+        Obtiene la key activa (rotando si hace falta) y cachea un genai.Client
+        por key_id para no recrearlo en cada llamada.
         """
-        api_key = settings.GEMINI_API_KEY.get_secret_value()
-
-        if not api_key or api_key == "tu_api_key_aqui":
-            raise ValueError(
-                "GEMINI_API_KEY no configurada. "
-                "Por favor agrega tu clave real en el archivo .env."
-            )
-        if self._client is None:
-            self._client = genai.Client(api_key=api_key)
-        return self._client
+        key_id, raw_key = key_rotation_service.get_active_client_key()
+        if key_id not in self._clients:
+            self._clients[key_id] = genai.Client(api_key=raw_key)
+        return key_id, self._clients[key_id]
 
     async def ping_connection(self) -> dict:
         """
@@ -38,10 +32,13 @@ class GeminiService:
         Usa client.aio para comunicación asíncrona no bloqueante.
         """
         model = settings.GEMINI_MODEL
-        response = await self.client.aio.models.generate_content(
+        key_id, client = self._get_client()
+        response = await client.aio.models.generate_content(
             model=model,
             contents="Responde únicamente con la palabra: 'CONECTADO'.",
         )
+        if response.usage_metadata is not None:
+            key_rotation_service.record_usage(key_id, response.usage_metadata)
         return {
             "status": "success",
             "environment": settings.ENVIRONMENT,

@@ -22,15 +22,26 @@ El backend fue diseñado bajo una **arquitectura en capas desacopladas (Clean Ar
 ```text
 backend/
 ├── app/
+│   ├── admin/
+│   │   ├── router.py             # Panel de administración HTML (/admin), HTTP Basic Auth
+│   │   └── templates/
+│   │       └── dashboard.html    # Consumo de IA + gestión de API keys (Jinja2)
 │   ├── api/
 │   │   └── v1/
 │   │       ├── endpoints/        # Capa de Controladores HTTP (Health, AI, Documentos)
 │   │       └── router.py         # Versionado y unificación de rutas v1
 │   ├── core/
-│   │   └── config.py             # Configuración centralizada y tipada (Pydantic Settings)
+│   │   ├── config.py             # Configuración centralizada y tipada (Pydantic Settings)
+│   │   ├── crypto.py             # Cifrado (Fernet) de las API keys guardadas en la DB
+│   │   └── security.py           # HTTP Basic Auth + verificación anti-CSRF del panel admin
+│   ├── db/
+│   │   ├── database.py           # Conexión SQLite + creación del esquema
+│   │   └── api_key_repository.py # Único punto con SQL: CRUD de keys y contadores de uso
 │   ├── services/
-│   │   └── gemini_service.py     # Capa de Negocio e Integración con Gemini API
+│   │   ├── gemini_service.py         # Capa de Negocio e Integración con Gemini API
+│   │   └── key_rotation_service.py   # Rotación automática y tracking de consumo por key
 │   └── main.py                   # Instanciación de FastAPI, Middlewares y OpenAPI
+├── app_data.db                   # DB local SQLite: API keys y contadores (IGNORADO en Git)
 ├── .env                          # Variables sensibles locales (IGNORADO en Git)
 ├── .env.example                  # Plantilla pública de variables requeridas
 ├── .gitignore                    # Reglas de exclusión de seguridad y entorno
@@ -51,6 +62,35 @@ backend/
    - Ninguna credencial sensible está hardcodeada. La API Key se lee dinámicamente desde variables de entorno (.env), con respaldo de una plantilla .env.example.
 5. **Políticas de CORS Preconfiguradas:**
    - Configuración explícita de orígenes seguros (localhost:3000, localhost:5173) para evitar problemas de bloqueo de peticiones cruzadas durante el desarrollo con React/Vite/Next.js.
+6. **Persistencia con SQLite (stdlib) para API Keys y Consumo:**
+   - Cero dependencias nuevas de terceros para persistencia. Todo el SQL vive aislado en `app/db/api_key_repository.py`; el resto de la app nunca ve una query.
+7. **Cifrado en Reposo de las API Keys (`cryptography` / Fernet):**
+   - Las keys de Gemini cargadas desde el panel de administración se guardan cifradas en la base local, no en texto plano.
+
+---
+
+## 🔐 Panel de Administración y Rotación de API Keys
+
+Para evitar caídas de servicio cuando se agota la capa gratuita de Gemini, el backend expone
+un panel interno en **`/admin`** (HTML, protegido con HTTP Basic Auth vía `ADMIN_USERNAME` /
+`ADMIN_PASSWORD`) que permite:
+
+- **Visualizar el consumo en tiempo real** por cada API key: requests y tokens usados vs. los
+  límites de la capa gratuita — **RPM** (requests/minuto), **TPM** (tokens/minuto) y **RPD**
+  (requests/día) — tal como los muestra [Google AI Studio](https://aistudio.google.com/) en
+  *"Límites de frecuencia por modelo"*.
+- **Cargar hasta 3 API keys de Gemini**, cada una con sus propios umbrales configurables.
+- **Rotación automática**: cuando la key activa se acerca a cualquiera de sus umbrales, el
+  backend cambia solo a la siguiente key disponible *antes* de la próxima llamada a Gemini.
+  Si las 3 keys están agotadas, la API responde `429` con un mensaje claro en vez de caerse.
+
+Los umbrales sugeridos por defecto (5 RPM / 250.000 TPM / 20 RPD) corresponden a la capa
+gratuita de **Gemini 2.5 Flash** (modelo default del proyecto) — ajustables por key desde el
+propio panel si tu cuenta u otro modelo tienen límites distintos.
+
+> 📖 La documentación funcional completa del panel (qué hace, cómo autentica, qué NO cubre
+> el esquema OpenAPI y por qué) está en la descripción de **ReDoc** (`/redoc`), sección
+> *"Panel de Administración"*.
 
 ---
 
@@ -70,7 +110,11 @@ FastAPI autogenera dos interfaces de documentación interactiva:
 | :--- | :--- | :--- | :--- |
 | GET | / | Bienvenida y enlaces a la documentación | ✅ Operativo |
 | GET | /api/v1/health | Chequeo de estado y versión del backend | ✅ Operativo |
-| POST | /api/v1/ai/test-gemini | Validación de conectividad y credenciales con Google Gemini | ✅ Operativo |
+| POST | /api/v1/ai/test-gemini | Validación de conectividad con Gemini (rota entre keys automáticamente) | ✅ Operativo |
+| GET | /admin | Panel de consumo de IA y gestión de API keys (HTML, HTTP Basic Auth) | ✅ Operativo |
+
+> `/admin` es HTML interno, no forma parte del contrato JSON versionado — por eso no aparece
+> en el esquema OpenAPI de `/docs`/`/redoc` (`include_in_schema=False`).
 
 ---
 
@@ -98,10 +142,24 @@ Copiar la plantilla .env.example para crear el archivo local .env:
 `powershell
 Copy-Item .env.example .env
 `
-Editar .env y configurar la clave:
+Editar .env y completar, como mínimo:
 `env
-GEMINI_API_KEY=tu_api_key_real_de_gemini
+# Credenciales del panel /admin (elegí tu propia contraseña)
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=una_contraseña_segura
+
+# Clave de cifrado para las API keys guardadas en la DB local (generarla una sola vez)
+DB_ENCRYPTION_KEY=
 `
+Generar `DB_ENCRYPTION_KEY` con:
+`powershell
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+`
+
+`GEMINI_API_KEY` en `.env` es **opcional**: si la completás y todavía no cargaste ninguna key
+desde `/admin`, se usa una única vez como semilla de la "Key #1" al arrancar el server. Después
+de eso, las API keys de Gemini (hasta 3, con rotación automática) se gestionan 100% desde el
+[panel de administración](#-panel-de-administración-y-rotación-de-api-keys).
 
 ### 4. Ejecutar el servidor de desarrollo
 `powershell
@@ -109,11 +167,15 @@ uvicorn app.main:app --reload
 `
 Acceder a la documentación interactiva en: **[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)**.
 
+Acceder al panel de administración (consumo de IA + API keys) en:
+**[http://127.0.0.1:8000/admin](http://127.0.0.1:8000/admin)** — pide `ADMIN_USERNAME`/`ADMIN_PASSWORD`.
+
 ---
 
 ## 🗺️ Roadmap de Backend (Plan de 12 Semanas)
 
 - [x] **Semana 0 (Sprint Planning):** Setup del entorno, arquitectura modular, configuración de CORS y validación de Gemini API.
+- [x] **Semana 0 (Infra adicional):** Panel de administración (`/admin`) para consumo de IA y rotación automática de hasta 3 API keys de Gemini según límites de la capa gratuita (RPM/TPM/RPD).
 - [ ] **Semana 1-2 (Sprint 1 - Exploración):** Pipeline de procesamiento de texto y PDFs (PyMuPDF), primeras pruebas de análisis con Gemini.
 - [ ] **Semana 3-4 (Sprint 2 - Ideación):** Motor de reglas automáticas + cálculo del puntaje orientativo de accesibilidad (0-100).
 - [ ] **Semana 5-6 (Sprint 3 - Desarrollo):** Generación de adaptaciones con IA (lenguaje claro, consignas en pasos, descripciones de imágenes).

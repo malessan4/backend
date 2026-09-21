@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>InnovaLab · Consumo de IA</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+        h1 { font-size: 1.4rem; }
+        table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #ddd; font-size: 0.9rem; vertical-align: top; }
+        th { background: #f5f5f5; }
+        .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+        .badge-active { background: #d7f3df; color: #1a6b34; }
+        .badge-standby { background: #e8e8e8; color: #555; }
+        .badge-near-limit { background: #fdecc8; color: #8a5b00; }
+        .badge-exhausted { background: #fbdadb; color: #a4262c; }
+        .badge-disabled { background: #eee; color: #999; }
+        .bar-track { background: #eee; border-radius: 4px; height: 6px; width: 100%; margin-top: 0.25rem; }
+        .bar-fill { background: #6b6bd6; height: 6px; border-radius: 4px; }
+        form.inline { display: inline; }
+        details.edit-form { margin-top: 0.4rem; }
+        fieldset { margin-top: 1.5rem; }
+        label { display: block; margin-top: 0.5rem; font-size: 0.85rem; }
+        input[type=text], input[type=password], input[type=number] { width: 100%; padding: 0.35rem; box-sizing: border-box; }
+        button { margin-top: 0.6rem; padding: 0.4rem 0.9rem; cursor: pointer; }
+        .danger { background: #fbdadb; border: 1px solid #a4262c; color: #a4262c; }
+        .muted { color: #777; font-size: 0.85rem; }
+    </style>
+</head>
+<body>
+    <h1>Consumo de IA — Gemini API Keys</h1>
+    <p class="muted">Rotación automática cuando una key se acerca a su umbral configurado (80%+).</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Label</th>
+                <th>Key</th>
+                <th>Estado</th>
+                <th>RPM</th>
+                <th>TPM</th>
+                <th>RPD</th>
+                <th>Uso</th>
+                <th>Acciones</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for k in keys %}
+            <tr>
+                <td>{{ k.label }}</td>
+                <td><code>{{ k.masked_key }}</code></td>
+                <td><span class="badge badge-{{ k.status }}">{{ k.status }}</span></td>
+                <td>{{ k.minute_request_count }}{% if k.rpm_threshold %} / {{ k.rpm_threshold }}{% endif %}</td>
+                <td>{{ k.minute_token_count }}{% if k.tpm_threshold %} / {{ k.tpm_threshold }}{% endif %}</td>
+                <td>{{ k.request_count }}{% if k.rpd_threshold %} / {{ k.rpd_threshold }}{% endif %}</td>
+                <td>
+                    {{ k.usage_pct }}%
+                    <div class="bar-track"><div class="bar-fill" style="width: {{ [k.usage_pct, 100] | min }}%;"></div></div>
+                </td>
+                <td>
+                    <details class="edit-form">
+                        <summary>Editar</summary>
+                        <form method="post" action="/admin/keys/{{ k.id }}/update">
+                            <label>Label
+                                <input type="text" name="label" value="{{ k.label }}" required>
+                            </label>
+                            <label>Nueva key (dejar vacío para no cambiarla)
+                                <input type="password" name="key_value" placeholder="••••••••">
+                            </label>
+                            <label>RPM — requests/minuto (opcional)
+                                <input type="number" name="rpm_threshold" value="{{ k.rpm_threshold or '' }}">
+                            </label>
+                            <label>TPM — tokens/minuto (opcional)
+                                <input type="number" name="tpm_threshold" value="{{ k.tpm_threshold or '' }}">
+                            </label>
+                            <label>RPD — requests/día (opcional)
+                                <input type="number" name="rpd_threshold" value="{{ k.rpd_threshold or '' }}">
+                            </label>
+                            <label>TPD — tokens/día, extra propio (opcional)
+                                <input type="number" name="tpd_threshold" value="{{ k.tpd_threshold or '' }}">
+                            </label>
+                            <label>
+                                <input type="checkbox" name="enabled" {% if k.enabled %}checked{% endif %} style="width:auto;display:inline-block;">
+                                Habilitada
+                            </label>
+                            <label>
+                                <input type="checkbox" name="make_current" style="width:auto;display:inline-block;">
+                                Marcar como activa ahora
+                            </label>
+                            <button type="submit">Guardar</button>
+                        </form>
+                    </details>
+                    <form class="inline" method="post" action="/admin/keys/{{ k.id }}/delete"
+                          onsubmit="return confirm('¿Borrar esta key?');">
+                        <button type="submit" class="danger">Borrar</button>
+                    </form>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="8" class="muted">Todavía no hay ninguna API key cargada.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <fieldset>
+        <legend>Agregar API key</legend>
+        {% if max_keys_reached %}
+            <p class="muted">Ya hay 3 keys cargadas (el máximo). Borrá una para poder agregar otra.</p>
+        {% else %}
+        <form method="post" action="/admin/keys">
+            <label>Label
+                <input type="text" name="label" placeholder="Ej: Key personal Juan" required>
+            </label>
+            <label>API key de Gemini
+                <input type="password" name="key_value" required>
+            </label>
+            <label>RPM — requests/minuto (opcional, ej: 5)
+                <input type="number" name="rpm_threshold" value="5">
+            </label>
+            <label>TPM — tokens/minuto (opcional, ej: 250000)
+                <input type="number" name="tpm_threshold" value="250000">
+            </label>
+            <label>RPD — requests/día (opcional, ej: 20)
+                <input type="number" name="rpd_threshold" value="20">
+            </label>
+            <label>TPD — tokens/día, extra propio (opcional)
+                <input type="number" name="tpd_threshold">
+            </label>
+            <p class="muted">Los valores sugeridos son la capa gratuita de Gemini 2.5 Flash. Revisá tu propio límite en AI Studio si usás otro modelo.</p>
+            <button type="submit">Agregar</button>
+        </form>
+        {% endif %}
+    </fieldset>
+</body>
+</html>
